@@ -1,1 +1,1 @@
-FROM 172.30.42.50:5000/testdeploy/testdeploy:latest
+FROM consol/tomcat-8.0:8.0.9
