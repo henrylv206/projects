@@ -1,2 +1,5 @@
-FROM consol/tomcat-8.0:8.0.9
-RUN chmod -R a+rw /opt/apache-tomcat-8.0.15/
+FROM tomcat:latest
+
+RUN chown -R 1001:0 /usr/local/tomcat && chmod -R ug+rw /usr/local/tomcat
+
+USER 1001
