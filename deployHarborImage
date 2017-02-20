@@ -1,5 +1,4 @@
-
-		DeploymentConfig deployConfig = new DeploymentConfig();
+DeploymentConfig deployConfig = new DeploymentConfig();
 		// metadata
 		ObjectMeta metadata = new ObjectMeta();
 		metadata.setName(appName);
@@ -13,7 +12,7 @@
 		// spec
 		DeploymentConfigSpec spec = new DeploymentConfigSpec();
 		spec.setReplicas(replicas);
-
+	
 		// pod template
 		PodTemplateSpec template = new PodTemplateSpec();
 		
@@ -38,10 +37,10 @@
 			PersistentVolumeClaimVolumeSource persistentVolumeClaim = null;
 			for (Map<String, String> temp : volumeList) {
 				volume = new Volume();
-				volume.setName(temp.get("name"));
+				volume.setName(namespace + temp.get("name"));
 
 				persistentVolumeClaim = new PersistentVolumeClaimVolumeSource();
-				persistentVolumeClaim.setClaimName(temp.get("name"));
+				persistentVolumeClaim.setClaimName(volume.getName());
 				volume.setPersistentVolumeClaim(persistentVolumeClaim);
 
 				volumes.add(volume);
@@ -54,7 +53,8 @@
 		List<Container> containers = new ArrayList<Container>();
 		Container container = new Container();
 		container.setName(appName);
-		if (imageName.endsWith(":latest")) {
+		
+		if (pullSecret == null) {
 			container.setImage(imageName);
 		}else{
 			container.setImage(hb_url + "/" + imageName);
@@ -137,7 +137,7 @@
 			VolumeMount volumeMount = null;
 			for (Map<String, String> temp : volumeList) {
 				volumeMount = new VolumeMount();
-				volumeMount.setName(temp.get("name"));
+				volumeMount.setName(namespace + temp.get("name"));
 				volumeMount.setMountPath(temp.get("mountPath"));
 
 				volumeMounts.add(volumeMount);
@@ -148,25 +148,28 @@
 
 		containers.add(container);
 		podSpec.setContainers(containers);
-		
-		List<LocalObjectReference> imagePullSecrets = new ArrayList<LocalObjectReference>();
-		LocalObjectReference imagePullSecret = new LocalObjectReference();
-		imagePullSecret.setName(pullSecret);
-		imagePullSecrets.add(imagePullSecret);
-		
-		if (imageName.endsWith(":latest")) {
-			// default builder secret
-			List<Secret> secrets = oclient.secrets().inNamespace(namespace).withField("type", "kubernetes.io/dockercfg").list().getItems();
-			for (Secret secret : secrets) {
-				if (secret.getMetadata().getName().startsWith("builder-dockercfg-")) {
-					imagePullSecret = new LocalObjectReference();
-					imagePullSecret.setName(secret.getMetadata().getName());
-					imagePullSecrets.add(imagePullSecret);
+	
+		// secret
+		if (pullSecret != null) {
+			List<LocalObjectReference> imagePullSecrets = new ArrayList<LocalObjectReference>();
+			LocalObjectReference imagePullSecret = new LocalObjectReference();
+			imagePullSecret.setName(pullSecret);
+			imagePullSecrets.add(imagePullSecret);
+			
+			if (imageName.endsWith(":latest")) {
+				// default builder secret
+				List<Secret> secrets = oclient.secrets().inNamespace(namespace).withField("type", "kubernetes.io/dockercfg").list().getItems();
+				for (Secret secret : secrets) {
+					if (secret.getMetadata().getName().startsWith("builder-dockercfg-")) {
+						imagePullSecret = new LocalObjectReference();
+						imagePullSecret.setName(secret.getMetadata().getName());
+						imagePullSecrets.add(imagePullSecret);
+					}
 				}
 			}
+			
+			podSpec.setImagePullSecrets(imagePullSecrets);
 		}
-		
-		podSpec.setImagePullSecrets(imagePullSecrets);
 		
 		template.setSpec(podSpec);
 		spec.setTemplate(template);
@@ -184,18 +187,32 @@
 		trigger.setType("ConfigChange");
 		triggers.add(trigger);
 
+		// TODO image change
+//		if (triggerByImage) {
+//			trigger = new DeploymentTriggerPolicy();
+//			trigger.setType("ImageChange");
+//			DeploymentTriggerImageChangeParams imageChangeParams = new DeploymentTriggerImageChangeParams();
+//			imageChangeParams.setAutomatic(Boolean.TRUE);
+//			List<String> containerNames = new ArrayList<String>();
+//			containerNames.add(appName);
+//			imageChangeParams.setContainerNames(containerNames);
+//			ObjectReference from = new ObjectReference();
+//			from.setKind("ImageStreamTag");
+//
+//			String temp = imageName.substring(imageName.lastIndexOf("/") + 1);
+//
+//			from.setName(temp.substring(0, temp.lastIndexOf(":")) + ":latest");
+//			imageChangeParams.setFrom(from);
+//			trigger.setImageChangeParams(imageChangeParams);
+//			
+//			triggers.add(trigger);
+//		}
+		
 		spec.setTriggers(triggers);
 
 		deployConfig.setSpec(spec);
 
-//		logger.info("check namespace deployHarborImage 1 "+namespace);
-//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getNamespace());
-//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getUsername());
-//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getPassword());
 		oclient.deploymentConfigs().inNamespace(namespace).create(deployConfig);
-
-		// create service
-		AppsVo app = this.createService(namespace, appName, ports, os_domain);
 
 		// image change
 		try {
@@ -225,4 +242,4 @@
 			e.printStackTrace();
 		}
 
-		return app;
+		return null;
