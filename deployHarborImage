@@ -1,0 +1,228 @@
+
+		DeploymentConfig deployConfig = new DeploymentConfig();
+		// metadata
+		ObjectMeta metadata = new ObjectMeta();
+		metadata.setName(appName);
+		metadata.setNamespace(namespace);
+		// labels
+		Map<String, String> labels = new HashMap<String, String>();
+		labels.put("app", appName);
+		metadata.setLabels(labels);
+		deployConfig.setMetadata(metadata);
+
+		// spec
+		DeploymentConfigSpec spec = new DeploymentConfigSpec();
+		spec.setReplicas(replicas);
+
+		// pod template
+		PodTemplateSpec template = new PodTemplateSpec();
+		
+		// TODO add metadata
+		metadata = new ObjectMeta();
+		metadata.setName(appName);
+		metadata.setNamespace(namespace);
+		// labels
+		labels = new HashMap<String, String>();
+		labels.put("app", appName);
+		labels.put("deploymentconfig", appName);
+		metadata.setLabels(labels);
+				
+		template.setMetadata(metadata);
+		
+		PodSpec podSpec = new PodSpec();
+
+		// volumes
+		if (volumeList != null && volumeList.size() > 0) {
+			List<Volume> volumes = new ArrayList<Volume>();
+			Volume volume = null;
+			PersistentVolumeClaimVolumeSource persistentVolumeClaim = null;
+			for (Map<String, String> temp : volumeList) {
+				volume = new Volume();
+				volume.setName(temp.get("name"));
+
+				persistentVolumeClaim = new PersistentVolumeClaimVolumeSource();
+				persistentVolumeClaim.setClaimName(temp.get("name"));
+				volume.setPersistentVolumeClaim(persistentVolumeClaim);
+
+				volumes.add(volume);
+			}
+
+			podSpec.setVolumes(volumes);
+		}
+
+		// container
+		List<Container> containers = new ArrayList<Container>();
+		Container container = new Container();
+		container.setName(appName);
+		if (imageName.endsWith(":latest")) {
+			container.setImage(imageName);
+		}else{
+			container.setImage(hb_url + "/" + imageName);
+		}
+
+		// update image
+		if (updateImage) {
+			container.setImagePullPolicy("Always");
+		} else {
+			container.setImagePullPolicy("IfNotPresent");
+		}
+
+		// config
+		if (config != null && config.size() > 0) {
+			ResourceRequirements resources = new ResourceRequirements();
+			Map<String, Quantity> requests = new HashMap<String, Quantity>();
+			Map<String, Quantity> limits = new HashMap<String, Quantity>();
+
+			requests.put("cpu", new Quantity(config.get("cpu"), null));
+			if (config.get("cpu").length() < 5) { // 1000m
+				limits.put("cpu", new Quantity("1000m", null));
+			} else {
+				limits.put("cpu", new Quantity(config.get("cpu"), null));
+			}
+
+			requests.put("memory", new Quantity(config.get("memory"), null));
+			limits.put("memory", new Quantity(config.get("memory"), null));
+
+			resources.setRequests(requests);
+			resources.setLimits(limits);
+			container.setResources(resources);
+		}
+
+		// env
+		if (envs != null && envs.size() > 0) {
+			List<EnvVar> envList = new ArrayList<EnvVar>();
+			EnvVar var = null;
+			String key = null;
+			for (Iterator<String> it = envs.keySet().iterator(); it.hasNext(); ) {
+				key = it.next();
+
+				var = new EnvVar();
+				var.setName(key);
+				var.setValue(envs.get(key).toString());
+
+				envList.add(var);
+			}
+			container.setEnv(envList);
+		}
+
+		// TODO port, get image port exposed
+
+//		if (ports == null || ports.size() == 0) {
+//			ports = new ArrayList<Map<String, Object>>();
+//			Map<String, Object> port = new HashMap<String, Object>();
+//			port.put("containerPort", 8080);
+//			port.put("protocol", "TCP");
+//			ports.add(port);
+//		}
+
+		List<ContainerPort> portList = new ArrayList<ContainerPort>();
+		Map<String, Object> port = null;
+		ContainerPort cPort = null;
+		for (Iterator<Map<String, Object>> it = ports.iterator(); it.hasNext(); ) {
+			port = it.next();
+			cPort = new ContainerPort();
+			cPort.setContainerPort(Integer.parseInt(port.get("containerPort").toString()));
+
+			if (((String)port.get("protocol")).toLowerCase().equals("http")) {
+				cPort.setProtocol("TCP");
+			}
+
+			portList.add(cPort);
+		}
+		container.setPorts(portList);
+
+		// mount volumes
+		if (volumeList != null && volumeList.size() > 0) {
+			List<VolumeMount> volumeMounts = new ArrayList<VolumeMount>();
+			VolumeMount volumeMount = null;
+			for (Map<String, String> temp : volumeList) {
+				volumeMount = new VolumeMount();
+				volumeMount.setName(temp.get("name"));
+				volumeMount.setMountPath(temp.get("mountPath"));
+
+				volumeMounts.add(volumeMount);
+			}
+
+			container.setVolumeMounts(volumeMounts);
+		}
+
+		containers.add(container);
+		podSpec.setContainers(containers);
+		
+		List<LocalObjectReference> imagePullSecrets = new ArrayList<LocalObjectReference>();
+		LocalObjectReference imagePullSecret = new LocalObjectReference();
+		imagePullSecret.setName(pullSecret);
+		imagePullSecrets.add(imagePullSecret);
+		
+		if (imageName.endsWith(":latest")) {
+			// default builder secret
+			List<Secret> secrets = oclient.secrets().inNamespace(namespace).withField("type", "kubernetes.io/dockercfg").list().getItems();
+			for (Secret secret : secrets) {
+				if (secret.getMetadata().getName().startsWith("builder-dockercfg-")) {
+					imagePullSecret = new LocalObjectReference();
+					imagePullSecret.setName(secret.getMetadata().getName());
+					imagePullSecrets.add(imagePullSecret);
+				}
+			}
+		}
+		
+		podSpec.setImagePullSecrets(imagePullSecrets);
+		
+		template.setSpec(podSpec);
+		spec.setTemplate(template);
+
+		// selector
+		Map<String, String> selectors = new HashMap<String, String>();
+		selectors.put("deploymentconfig", appName);
+		spec.setSelector(selectors);
+
+		// trigger
+		List<DeploymentTriggerPolicy> triggers = new ArrayList<DeploymentTriggerPolicy>();
+		DeploymentTriggerPolicy trigger = new DeploymentTriggerPolicy();
+
+		// config change
+		trigger.setType("ConfigChange");
+		triggers.add(trigger);
+
+		spec.setTriggers(triggers);
+
+		deployConfig.setSpec(spec);
+
+//		logger.info("check namespace deployHarborImage 1 "+namespace);
+//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getNamespace());
+//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getUsername());
+//		logger.info("check namespace deployHarborImage 2 "+oclient.getConfiguration().getPassword());
+		oclient.deploymentConfigs().inNamespace(namespace).create(deployConfig);
+
+		// create service
+		AppsVo app = this.createService(namespace, appName, ports, os_domain);
+
+		// image change
+		try {
+			if (triggerByImage) {
+				trigger = new DeploymentTriggerPolicy();
+				trigger.setType("ImageChange");
+				DeploymentTriggerImageChangeParams imageChangeParams = new DeploymentTriggerImageChangeParams();
+				imageChangeParams.setAutomatic(Boolean.TRUE);
+				List<String> containerNames = new ArrayList<String>();
+				containerNames.add(appName);
+				imageChangeParams.setContainerNames(containerNames);
+				ObjectReference from = new ObjectReference();
+				from.setKind("ImageStreamTag");
+
+				String temp = imageName.substring(imageName.lastIndexOf("/") + 1);
+
+				from.setName(temp.substring(0, temp.lastIndexOf(":")) + ":latest");
+				imageChangeParams.setFrom(from);
+				trigger.setImageChangeParams(imageChangeParams);
+
+				oclient.deploymentConfigs().inNamespace(namespace).withName(appName).edit()
+						.editSpec()
+						.addToTriggers(trigger)
+						.endSpec().done();
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return app;
